@@ -147,6 +147,7 @@ export function createBridge({ token, turn, tls, timeoutMs = 300_000, diagnose =
       if (stable.length <= sent.length || !snapshot.startsWith(stable)) return;
       const parts = [{ text: stable.slice(sent.length) }];
       event({ candidates: [{ index: 0, content: { role: 'model', parts } }] });
+      if (!sent) diagnose('Browser emitted incremental text.');
       sent = stable;
     }
     try {

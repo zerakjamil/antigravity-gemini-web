@@ -55,9 +55,11 @@ Stop the bridge with `kill "$bridge_pid"`. Remove the added provider setting and
 
 ## Verification and limits
 
-`npm test` checks the model catalog, HTTPS Gateway authentication, the tool round trip, and rejection of an undeclared tool. Run `node verify-web.mjs` to test both signed-in Web models through the bridge with a synthetic local file. The test driver runs the file read, so this check measures the Web model and bridge independently of Antigravity. The separate standalone Antigravity IDE has no integration in this package.
+`npm test` checks the model catalog, HTTPS Gateway authentication, the tool round trip, and rejection of an undeclared tool. Run `node verify-web.mjs` to test both signed-in Web models through the bridge with a synthetic local file. Add `--streaming` to measure the first and final SSE events on a fictional writing prompt for each model. The test driver runs the file read, so this check measures the Web model and bridge independently of Antigravity. The separate standalone Antigravity IDE has no integration in this package.
 
 On macOS with Antigravity Desktop 2.32.1, both Web entries appeared. Each model completed a native `read_file` round trip and returned the exact value from a disposable file, as verified in Antigravity's transcripts. The desktop tests needed retries and took about a minute each. Set `GEMINI_WEB_DIAGNOSTICS=1` when running `node desktop.mjs` to see turn sizes and worker stages without printing prompt text or credentials.
+
+After adding incremental SSE and the request queue, a live browser run delivered nine text events for each model. Hydrogen delivered the first and final events at 9.8 and 14.6 seconds, and Argon at 9.6 and 25.1 seconds. A separate Hydrogen run in Antigravity Desktop queued an overlapping request and completed its native file-tool round trip in 28 seconds. These are individual smoke-test observations.
 
 The browser worker requires the mode picker to confirm the requested model before sending. It replays text history in a fresh browser chat for each turn. SSE can deliver stable paragraphs while Gemini Web is still generating, with the final text delivered at completion. Short answers can still arrive in one event. If the browser rewrites text already emitted, the bridge closes the stream. Tool calls are parsed only after the full reply arrives and are limited to one declared local function per turn. User attachments, provider-side tools and native model controls are outside this prototype. Token counting is an estimate for the local harness.
 
