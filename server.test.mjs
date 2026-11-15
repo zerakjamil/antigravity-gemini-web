@@ -165,3 +165,35 @@ test('queues overlapping turns and drops a disconnected waiter', async (t) => {
   assert.equal((await following).status, 200);
   assert.deepEqual(calls, ['turn-first', 'turn-next']);
 });
+
+test('terminates an incremental stream if Gemini revises text already sent', async (t) => {
+  const revise = Promise.withResolvers();
+  const server = createBridge({
+    token: 'revision-token',
+    async turn(_prompt, signal, _family, _attachment, observe) {
+      observe('Initial paragraph.\n\nSecond');
+      observe('Initial paragraph.\n\nSecond paragraph.');
+      await Promise.race([revise.promise, new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }))]);
+      observe('Revised paragraph.\n\nSecond paragraph.');
+      assert.fail('A revision to emitted text must interrupt the turn.');
+    },
+  });
+  t.after(() => {
+    revise.resolve();
+    server.close();
+    server.closeAllConnections();
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/v1beta/models/${model}:streamGenerateContent?alt=sse`, {
+    signal: AbortSignal.timeout(3000),
+    method: 'POST',
+    headers: { authorization: 'Bearer revision-token' },
+    body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'Write two paragraphs.' }] }] }),
+  });
+  const reader = response.body.getReader();
+  const first = new TextDecoder().decode((await reader.read()).value);
+  assert.match(first, /Initial paragraph/);
+  assert.doesNotMatch(first, /finishReason/);
+  revise.resolve();
+  await assert.rejects(reader.read(), TypeError);
+});
