@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.build/
+*.app/
+*.dmg
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.log
+.DS_Store
