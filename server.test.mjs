@@ -111,3 +111,57 @@ test('streams stable text before browser completion without replaying it', async
   assert.equal(last.finishReason, 'STOP');
   assert.equal((await reader.read()).done, true);
 });
+
+test('queues overlapping turns and drops a disconnected waiter', async (t) => {
+  let releaseFirst;
+  let firstStarted;
+  const first = new Promise(resolve => { firstStarted = resolve; });
+  const held = new Promise(resolve => { releaseFirst = resolve; });
+  const calls = [];
+  const queued = [Promise.withResolvers(), Promise.withResolvers()];
+  const removed = Promise.withResolvers();
+  let nextWaiter = 0;
+  const server = createBridge({
+    token: 'queue-token',
+    diagnose(message) {
+      if (message === 'Browser turn queued.') queued[nextWaiter++].resolve();
+      if (message === 'Gemini Web turn cancelled or timed out.') removed.resolve();
+    },
+    async turn(prompt) {
+      const label = /turn-(?:first|cancelled|next)/.exec(prompt)[0];
+      calls.push(label);
+      if (label === 'turn-first') {
+        firstStarted();
+        await held;
+      }
+      return label;
+    },
+  });
+  t.after(() => {
+    releaseFirst();
+    server.close();
+    server.closeAllConnections();
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  function send(text, signal = AbortSignal.timeout(3000)) {
+    return fetch(`http://127.0.0.1:${server.address().port}/v1beta/models/${model}:generateContent`, {
+      signal, method: 'POST', headers: { authorization: 'Bearer queue-token' },
+      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text }] }] }),
+    });
+  }
+  const active = send('turn-first');
+  await first;
+  const cancelled = new AbortController();
+  const abandoned = assert.rejects(send('turn-cancelled', cancelled.signal), { name: 'AbortError' });
+  await queued[0].promise;
+  const following = send('turn-next');
+  await queued[1].promise;
+  cancelled.abort();
+  await abandoned;
+  await removed.promise;
+  assert.deepEqual(calls, ['turn-first']);
+  releaseFirst();
+  assert.equal((await active).status, 200);
+  assert.equal((await following).status, 200);
+  assert.deepEqual(calls, ['turn-first', 'turn-next']);
+});

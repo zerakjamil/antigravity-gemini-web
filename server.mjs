@@ -76,6 +76,7 @@ export function createBridge({ token, turn, tls, timeoutMs = 300_000, diagnose =
   if (!token) throw new Error('Set ARGON_BRIDGE_TOKEN.');
   const secret = Buffer.from(token);
   let busy = false;
+  const waiting = [];
   const handler = async (req, res) => {
     let url;
     try {
@@ -118,12 +119,15 @@ export function createBridge({ token, turn, tls, timeoutMs = 300_000, diagnose =
     if (method === 'countTokens') {
       return json(res, 200, { totalTokens: Math.ceil(Buffer.byteLength(input.prompt) / 2) });
     }
-    if (busy) return json(res, 429, { error: { message: 'The browser is handling another turn.' } });
+    if (res.destroyed) return;
+    if (waiting.length >= 4) {
+      return json(res, 429, { error: { message: 'The browser turn queue is full.' } });
+    }
 
-    busy = true;
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), timeoutMs);
     res.once('close', () => abort.abort());
+    let acquired = false;
     const streaming = method === 'streamGenerateContent' && url.searchParams.get('alt') === 'sse';
     let sent = '';
     let previous = '';
@@ -146,6 +150,24 @@ export function createBridge({ token, turn, tls, timeoutMs = 300_000, diagnose =
       sent = stable;
     }
     try {
+      if (busy) {
+        diagnose('Browser turn queued.');
+        acquired = await new Promise(resolve => {
+          const ready = () => {
+            abort.signal.removeEventListener('abort', cancel);
+            resolve(true);
+          };
+          const cancel = () => {
+            waiting.splice(waiting.indexOf(ready), 1);
+            resolve(false);
+          };
+          waiting.push(ready);
+          abort.signal.addEventListener('abort', cancel, { once: true });
+        });
+      } else {
+        busy = acquired = true;
+      }
+      abort.signal.throwIfAborted();
       const family = name.slice('models/gemini-4-'.length, -'-web'.length);
       diagnose(`Browser turn for ${family} with ${Buffer.byteLength(input.prompt)} bytes.`);
       const answer = await turn(input.prompt, abort.signal, family, input.attachmentMessage, observe);
@@ -171,7 +193,11 @@ export function createBridge({ token, turn, tls, timeoutMs = 300_000, diagnose =
       });
     } finally {
       clearTimeout(timer);
-      busy = false;
+      if (acquired) {
+        const next = waiting.shift();
+        if (next) next();
+        else busy = false;
+      }
     }
   };
   return tls ? createSecureServer(tls, handler) : createServer(handler);
