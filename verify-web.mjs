@@ -9,13 +9,14 @@ import assert from 'node:assert/strict';
 
 const token = randomBytes(32).toString('hex');
 const testStreaming = process.argv.includes('--streaming');
+const testBatch = process.argv.includes('--batch');
 const workspace = await mkdtemp(join(tmpdir(), 'gemini-web-smoke-'));
-const fixture = join(workspace, 'sample.txt');
-const nonce = 'BRIDGE_FILE_' + randomBytes(6).toString('hex');
-await writeFile(fixture, nonce);
+const paths = testBatch ? ['first.txt', 'second.txt'] : ['sample.txt'];
+const fixtures = new Map(paths.map(path => [path, 'BRIDGE_FILE_' + randomBytes(6).toString('hex')]));
 let browser;
 let bridge;
 try {
+  await Promise.all([...fixtures].map(([path, value]) => writeFile(join(workspace, path), value)));
   const profile = process.env.ARGON_CHROME_PROFILE ?? join(homedir(), '.gemini', 'argon-chrome-profile');
   browser = await openBrowser(profile);
   bridge = createBridge({ token, turn: (...args) => runTurn(browser, ...args) });
@@ -51,15 +52,22 @@ try {
       type: 'object', properties: { path: { type: 'string' } }, required: ['path'],
     } }] }];
     const started = performance.now();
-    const user = { role: 'user', parts: [{ text: 'Use the read_file tool to read sample.txt and respond with only its exact contents.' }] };
+    const user = { role: 'user', parts: [{ text: testBatch
+      ? 'Request two independent read_file calls in one tool turn for first.txt and second.txt. After both calls finish, answer with the exact contents of first.txt followed by the exact contents of second.txt, separated by one newline.'
+      : 'Use the read_file tool to read sample.txt and respond with only its exact contents.' }] };
     const toolUpdates = await send([user], tools);
     assert.equal(toolUpdates.length, 1, 'Expected one completed tool event.');
     const call = toolUpdates[0].candidate.content;
-    assert.deepEqual(call.parts[0].functionCall, { name: 'read_file', args: { path: 'sample.txt' } });
-    const text = await readFile(fixture, 'utf8');
-    const answer = await send([user, call, { role: 'user', parts: [{ functionResponse: { name: 'read_file', response: { text } } }] }], tools);
-    assert.equal(answer.flatMap(update => update.candidate.content.parts).map(part => part.text).join(''), nonce);
-    console.log(model, 'live file tool loop verified in', Math.round((performance.now() - started) / 1000), 'seconds');
+    const calls = call.parts.map(part => part.functionCall);
+    assert.deepEqual(calls.map(fn => fn?.args?.path).sort(), paths);
+    const results = await Promise.all(calls.map(async fn => {
+      assert.deepEqual(fn, { name: 'read_file', args: { path: fn.args.path } });
+      const text = await readFile(join(workspace, fn.args.path), 'utf8');
+      return { functionResponse: { name: fn.name, response: { text } } };
+    }));
+    const answer = await send([user, call, { role: 'user', parts: results }], tools);
+    assert.equal(answer.flatMap(update => update.candidate.content.parts).map(part => part.text).join(''), [...fixtures.values()].join('\n'));
+    console.log(model, 'live file tool loop verified with', calls.length, 'call(s) in', Math.round((performance.now() - started) / 1000), 'seconds');
     if (testStreaming) {
       const events = await send([{ role: 'user', parts: [{
         text: 'Write eight paragraphs describing a fictional moon garden. Leave one blank line between paragraphs. Give each paragraph at least three sentences. End with a standalone paragraph reading STREAM_END.',
