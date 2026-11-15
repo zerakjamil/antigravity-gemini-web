@@ -57,7 +57,7 @@ Stop the bridge with `kill "$bridge_pid"`. Remove the added provider setting and
 
 `npm test` checks the model catalog, HTTPS Gateway authentication, the tool round trip, and rejection of an undeclared tool. Run `node verify-web.mjs` to test both signed-in Web models through the bridge with a synthetic local file. The test driver runs the file read, so this check measures the Web model and bridge independently of Antigravity. The separate standalone Antigravity IDE has no integration in this package.
 
-On macOS with Antigravity Desktop 2.32.1, both Web entries appeared and Argon completed a native `read_file` round trip. A desktop test required retries. Set `GEMINI_WEB_DIAGNOSTICS=1` when running `node desktop.mjs` to see turn sizes and worker stages without printing prompt text or credentials.
+On macOS with Antigravity Desktop 2.32.1, both Web entries appeared. Each model completed a native `read_file` round trip and returned the exact value from a disposable file, as verified in Antigravity's transcripts. The desktop tests needed retries and took about a minute each. Set `GEMINI_WEB_DIAGNOSTICS=1` when running `node desktop.mjs` to see turn sizes and worker stages without printing prompt text or credentials.
 
 The browser worker requires the mode picker to confirm the requested model before sending. The current build replays text history in a fresh browser chat for each turn and returns one completed SSE event, so the first visible text can arrive later than with a native streaming model. Tool calls are prompted JSON and are limited to one declared local function per turn. Attachments, provider-side tools and native model controls are outside this prototype. Token counting is an estimate for the local harness.
 
