@@ -124,15 +124,39 @@ export function createBridge({ token, turn, tls, timeoutMs = 300_000, diagnose =
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), timeoutMs);
     res.once('close', () => abort.abort());
+    const streaming = method === 'streamGenerateContent' && url.searchParams.get('alt') === 'sse';
+    let sent = '';
+    let previous = '';
+    function event(data) {
+      if (!res.headersSent) {
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+      }
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    }
+    function observe(snapshot) {
+      if (!streaming || input.required || toolPrefix.startsWith(snapshot) || snapshot.startsWith(toolPrefix)) return;
+      if (!snapshot.startsWith(sent)) throw new Error('Gemini Web revised streamed text.');
+      // Emit a completed paragraph only after it survived a second DOM snapshot.
+      const boundary = previous.lastIndexOf('\n\n');
+      const stable = boundary < 0 ? '' : previous.slice(0, boundary + 2);
+      previous = snapshot;
+      if (stable.length <= sent.length || !snapshot.startsWith(stable)) return;
+      const parts = [{ text: stable.slice(sent.length) }];
+      event({ candidates: [{ index: 0, content: { role: 'model', parts } }] });
+      sent = stable;
+    }
     try {
       const family = name.slice('models/gemini-4-'.length, -'-web'.length);
       diagnose(`Browser turn for ${family} with ${Buffer.byteLength(input.prompt)} bytes.`);
-      const answer = await turn(input.prompt, abort.signal, family, input.attachmentMessage);
+      const answer = await turn(input.prompt, abort.signal, family, input.attachmentMessage, observe);
       const response = finish(partsFromAnswer(answer, input));
       diagnose(response.candidates[0].content.parts[0].functionCall ? 'Browser returned a local tool call.' : 'Browser returned final text.');
-      if (method === 'streamGenerateContent' && url.searchParams.get('alt') === 'sse') {
-        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
-        res.end(`data: ${JSON.stringify(response)}\n\n`);
+      if (streaming) {
+        const parts = response.candidates[0].content.parts;
+        if (sent && !parts[0].text?.startsWith(sent)) throw new Error('Gemini Web revised streamed text.');
+        if (sent) parts[0].text = parts[0].text.slice(sent.length);
+        event(response);
+        res.end();
       } else {
         json(res, 200, method === 'streamGenerateContent' ? [response] : response);
       }
@@ -141,7 +165,8 @@ export function createBridge({ token, turn, tls, timeoutMs = 300_000, diagnose =
         ? error.message
         : 'Gemini Web returned an invalid or unavailable tool response.';
       diagnose(abort.signal.aborted ? 'Gemini Web turn cancelled or timed out.' : detail);
-      if (!res.destroyed) json(res, abort.signal.aborted ? 504 : 502, {
+      if (res.headersSent) res.destroy();
+      else if (!res.destroyed) json(res, abort.signal.aborted ? 504 : 502, {
         error: { message: abort.signal.aborted ? 'Gemini Web turn timed out.' : detail },
       });
     } finally {

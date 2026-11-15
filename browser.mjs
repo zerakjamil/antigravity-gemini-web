@@ -16,7 +16,7 @@ export async function openBrowser(profile) {
   return chromium.launchPersistentContext(profile, { channel: 'chrome', headless: false });
 }
 
-export async function runTurn(browser, prompt, signal, model, attachmentMessage) {
+export async function runTurn(browser, prompt, signal, model, attachmentMessage, observe) {
   const mode = models[model];
   if (!mode) throw new Error('Unknown Gemini Web model.');
   const page = await browser.newPage();
@@ -56,7 +56,6 @@ export async function runTurn(browser, prompt, signal, model, attachmentMessage)
     stage = 'submitting the Gemini Web turn';
     await page.getByRole('button', { name: 'Send message', exact: true }).click({ timeout: 20_000 });
 
-    // Wait for the final DOM snapshot because the site can rewrite previously rendered text.
     const stop = page.getByRole('button', { name: /^Stop(?:$|\s+(?:response|generating|generation))/i });
     let previous = '';
     let changedAt = Date.now();
@@ -66,8 +65,9 @@ export async function runTurn(browser, prompt, signal, model, attachmentMessage)
       const generating = await stop.isVisible();
       sawGeneration ||= generating;
       const text = await answers.count() > baseline ? (await answers.last().innerText()).trim() : '';
+      if (text) observe?.(text);
       if (text !== previous || generating) changedAt = Date.now();
-      if (sawGeneration && !generating && text && Date.now() - changedAt >= 1200) return text;
+      if (!generating && text && Date.now() - changedAt >= (sawGeneration ? 1200 : 2500)) return text;
       previous = text;
       await page.waitForTimeout(250);
     }

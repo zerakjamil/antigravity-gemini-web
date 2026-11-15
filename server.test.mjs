@@ -75,3 +75,39 @@ test('the desktop Gateway accepts a scoped certificate and bearer token', async 
   });
   assert.equal(status, 200);
 });
+
+test('streams stable text before browser completion without replaying it', async (t) => {
+  let finishTurn;
+  const pending = new Promise(resolve => { finishTurn = resolve; });
+  const server = createBridge({
+    token: 'stream-token',
+    async turn(_prompt, signal, _family, _attachment, observe) {
+      observe('First paragraph.\n\nSecond');
+      observe('First paragraph.\n\nSecond paragraph.');
+      await Promise.race([pending, new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }))]);
+      return 'First paragraph.\n\nSecond paragraph.';
+    },
+  });
+  t.after(() => {
+    finishTurn();
+    server.close();
+    server.closeAllConnections();
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/v1beta/models/${model}:streamGenerateContent?alt=sse`, {
+    signal: AbortSignal.timeout(3000),
+    method: 'POST',
+    headers: { authorization: 'Bearer stream-token' },
+    body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'Write two paragraphs.' }] }] }),
+  });
+  const reader = response.body.getReader();
+  const decode = bytes => JSON.parse(new TextDecoder().decode(bytes).trim().slice(6)).candidates[0];
+  const first = decode((await reader.read()).value);
+  assert.equal(first.content.parts[0].text, 'First paragraph.\n\n');
+  assert.equal(first.finishReason, undefined);
+  finishTurn();
+  const last = decode((await reader.read()).value);
+  assert.equal(last.content.parts[0].text, 'Second paragraph.');
+  assert.equal(last.finishReason, 'STOP');
+  assert.equal((await reader.read()).done, true);
+});
