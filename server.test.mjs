@@ -13,7 +13,9 @@ test('the Web provider converts calls and returns their results to the next turn
       prompts.push(prompt);
       if (prompts.length === 1) return 'LOCAL_TOOL_CALL {"name":"read_file","args":{"path":"sample.txt"}}';
       if (prompts.length === 2) return 'The file says ARGON_OK.';
-      return 'LOCAL_TOOL_CALL {"name":"undeclared","args":{}}';
+      if (prompts.length === 3) return 'LOCAL_TOOL_CALL [{"name":"read_file","args":{"path":"a.txt"}},{"name":"read_file","args":{"path":"b.txt"}}]';
+      if (prompts.length === 4) return 'Both files received.';
+      return 'LOCAL_TOOL_CALL [{"name":"read_file","args":{"path":"a.txt"}},{"name":"undeclared","args":{}}]';
     },
   });
   await new Promise((resolve, reject) => {
@@ -50,7 +52,17 @@ test('the Web provider converts calls and returns their results to the next turn
   const second = await request();
   assert.match(await second.text(), /The file says ARGON_OK/);
   assert.match(prompts[1], /"functionResponse":\{"name":"read_file","response":\{"text":"ARGON_OK"\}\}/);
-  assert.equal((await request()).status, 502);
+  const batchResponse = await request();
+  const batch = JSON.parse((await batchResponse.text()).slice(6)).candidates[0].content;
+  assert.deepEqual(batch.parts, ['a.txt', 'b.txt'].map(path => ({ functionCall: { name: 'read_file', args: { path } } })));
+  input.contents.push(batch, {
+    role: 'user', parts: ['A_FILE', 'B_FILE'].map(text => ({ functionResponse: { name: 'read_file', response: { text } } })),
+  });
+  assert.match(await (await request()).text(), /Both files received/);
+  assert.match(prompts[3], /A_FILE.*B_FILE/);
+  const invalid = await request();
+  assert.equal(invalid.status, 502);
+  assert.doesNotMatch(await invalid.text(), /functionCall/);
 });
 
 test('the desktop Gateway accepts a scoped certificate and bearer token', async (t) => {

@@ -14,6 +14,7 @@ const catalog = ['Argon', 'Hydrogen'].map(label => ({
   inputTokenLimit: 32000, outputTokenLimit: 8192,
 }));
 const toolPrefix = 'LOCAL_TOOL_CALL ';
+const maxToolCalls = 4;
 const maxBytes = 2 * 1024 * 1024;
 const finish = (parts, reason = 'STOP') => ({
   candidates: [{ index: 0, content: { role: 'model', parts }, finishReason: reason }],
@@ -38,7 +39,7 @@ function compile(request) {
     }
   }
   const protocol = permitted.length
-    ? 'To request a listed local tool, return one plain-text line starting with LOCAL_TOOL_CALL followed by a JSON object with "name" and "args". Return only that line, without Markdown. The harness handles permissions and sends tool results in a later request.'
+    ? `To request a listed local tool, return only one plain-text line starting with LOCAL_TOOL_CALL followed by a JSON object with "name" and "args". For independent calls, you may send a JSON array of up to ${maxToolCalls} such objects on that line. Wait for results before requesting a dependent call. Do not use Markdown. The harness handles permissions and sends tool results in a later request.`
     : 'Respond with text.';
   const prompt = [
     'Continue the supplied Antigravity coding conversation. Conversation history includes instructions, user input and local tool results. You cannot execute local tools yourself.',
@@ -60,11 +61,14 @@ function partsFromAnswer(answer, { permitted, required }) {
     if (required) throw new Error('Gemini Web returned text when a tool call was required.');
     return [{ text: answer }];
   }
-  const call = JSON.parse(answer.slice(toolPrefix.length));
-  if (!permitted.has(call?.name) || !call.args || Array.isArray(call.args) || typeof call.args !== 'object') {
+  const payload = JSON.parse(answer.slice(toolPrefix.length));
+  const calls = Array.isArray(payload) ? payload : [payload];
+  if (!calls.length || calls.length > maxToolCalls || calls.some(call =>
+    !permitted.has(call?.name) || !call.args || Array.isArray(call.args) || typeof call.args !== 'object'
+  )) {
     throw new Error('Gemini Web returned an invalid or undeclared tool call.');
   }
-  return [{ functionCall: { name: call.name, args: call.args } }];
+  return calls.map(({ name, args }) => ({ functionCall: { name, args } }));
 }
 
 function json(res, status, data) {
