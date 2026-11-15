@@ -67,6 +67,6 @@ The browser worker requires the mode picker to confirm the requested model befor
 
 Large harness requests are sent to Gemini Web as a text attachment. Review the workspace and tools you make available to the session. Model prompts, enabled tool descriptions, and tool results can be included in the Google account's chats. The bridge keeps sign-in state in the dedicated Chrome profile and does not export cookies.
 
-One browser turn runs at a time. Up to four overlapping requests wait in order, and a disconnected request is removed from the queue. The turn timeout includes time spent waiting.
+One browser turn runs at a time. Up to four overlapping requests wait in order, and a disconnected request is removed from the queue. The turn timeout includes time spent waiting. In desktop diagnostics, each start line shows that queue wait. Browser timings then show elapsed milliseconds from the start of the browser turn to composer readiness, model confirmation, prompt submission, first text, and completion. The logs contain no prompt or reply text.
 
 The browser-backed transport and separation of model inference from local tools were inspired by [codex-chatgpt-web](https://github.com/miuuyy/codex-chatgpt-web/blob/main/docs/architecture.md).

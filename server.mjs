@@ -76,7 +76,7 @@ function json(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
-export function createBridge({ token, turn, tls, timeoutMs = 300_000, diagnose = () => {} }) {
+export function createBridge({ token, turn, tls, timeoutMs = 300_000, diagnose }) {
   if (!token) throw new Error('Set ARGON_BRIDGE_TOKEN.');
   const secret = Buffer.from(token);
   let busy = false;
@@ -128,6 +128,7 @@ export function createBridge({ token, turn, tls, timeoutMs = 300_000, diagnose =
       return json(res, 429, { error: { message: 'The browser turn queue is full.' } });
     }
 
+    const queuedAt = performance.now();
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), timeoutMs);
     res.once('close', () => abort.abort());
@@ -151,12 +152,12 @@ export function createBridge({ token, turn, tls, timeoutMs = 300_000, diagnose =
       if (stable.length <= sent.length || !snapshot.startsWith(stable)) return;
       const parts = [{ text: stable.slice(sent.length) }];
       event({ candidates: [{ index: 0, content: { role: 'model', parts } }] });
-      if (!sent) diagnose('Browser emitted incremental text.');
+      if (!sent) diagnose?.('Browser emitted incremental text.');
       sent = stable;
     }
     try {
       if (busy) {
-        diagnose('Browser turn queued.');
+        diagnose?.('Browser turn queued.');
         acquired = await new Promise(resolve => {
           const ready = () => {
             abort.signal.removeEventListener('abort', cancel);
@@ -174,10 +175,10 @@ export function createBridge({ token, turn, tls, timeoutMs = 300_000, diagnose =
       }
       abort.signal.throwIfAborted();
       const family = name.slice('models/gemini-4-'.length, -'-web'.length);
-      diagnose(`Browser turn for ${family} with ${Buffer.byteLength(input.prompt)} bytes.`);
-      const answer = await turn(input.prompt, abort.signal, family, input.attachmentMessage, observe);
+      diagnose?.(`Browser turn for ${family} with ${Buffer.byteLength(input.prompt)} bytes began after ${Math.round(performance.now() - queuedAt)} ms in queue.`);
+      const answer = await turn(input.prompt, abort.signal, family, input.attachmentMessage, observe, diagnose);
       const response = finish(partsFromAnswer(answer, input));
-      diagnose(response.candidates[0].content.parts[0].functionCall ? 'Browser returned a local tool call.' : 'Browser returned final text.');
+      diagnose?.(response.candidates[0].content.parts[0].functionCall ? 'Browser returned a local tool call.' : 'Browser returned final text.');
       if (streaming) {
         const parts = response.candidates[0].content.parts;
         if (sent && !parts[0].text?.startsWith(sent)) throw new Error('Gemini Web revised streamed text.');
@@ -191,7 +192,7 @@ export function createBridge({ token, turn, tls, timeoutMs = 300_000, diagnose =
       const detail = /^Gemini Web failed while [a-zA-Z ]+\.$/.test(error?.message)
         ? error.message
         : 'Gemini Web returned an invalid or unavailable tool response.';
-      diagnose(abort.signal.aborted ? 'Gemini Web turn cancelled or timed out.' : detail);
+      diagnose?.(abort.signal.aborted ? 'Gemini Web turn cancelled or timed out.' : detail);
       if (res.headersSent) res.destroy();
       else if (!res.destroyed) json(res, abort.signal.aborted ? 504 : 502, {
         error: { message: abort.signal.aborted ? 'Gemini Web turn timed out.' : detail },
