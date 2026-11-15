@@ -6,11 +6,11 @@ Gemini Web Bridge connects the signed-in Gemini website to Antigravity for 4 Arg
 
 Install Node.js 22+, Chrome, Antigravity Desktop and the Xcode command-line tools. In the repository run `npm ci` and `./launcher/build.sh dist`. Open `dist/Gemini Web Bridge.app`. Choose **Sign In** to open the dedicated Chrome profile, sign in to Gemini, and close that window. Choose **Verify Web tools** to run the two-model file test or **Start Antigravity** to start a Gateway session. Quit any existing Antigravity session first. See [launcher setup](launcher/README.md) for Node discovery and build details.
 
-## Desktop app integration under test
+## Antigravity Desktop
 
 On macOS, close the Antigravity desktop app and any Chrome window using the dedicated Argon profile. From this directory run `npm ci` and `npm run desktop`. The launcher starts a loopback HTTPS Gateway, starts Antigravity with Gateway settings for that process, and stops the bridge when Antigravity exits. It issues a temporary local bearer token and trusts the temporary TLS certificate only in the launched app. Google documents [Gateway routing with native tool execution](https://docs.cloud.google.com/gemini/enterprise/docs/ai-developer-tools/connect-enterprise-gateway#workstation_security_and_local_sandboxing).
 
-The desktop connection and model picker still need a live acceptance test. In a disposable workspace, check for **Connected: Enterprise Gateway**, select the desired Web model from the picker, and request an exact read of a test file. Verify the file tool and the follow-up answer in Antigravity. Quit and reopen Antigravity normally to return to Google account sign-in.
+In a disposable workspace, select **gemini-4-argon-web** or **gemini-4-hydrogen-web** from the model picker and request an exact read of a test file. Verify the file tool and the follow-up answer in Antigravity. Quit and reopen Antigravity normally to return to Google account sign-in.
 
 ## CLI option
 
@@ -56,6 +56,8 @@ Stop the bridge with `kill "$bridge_pid"`. Remove the added provider setting and
 ## Verification and limits
 
 `npm test` checks the model catalog, HTTPS Gateway authentication, the tool round trip, and rejection of an undeclared tool. Run `node verify-web.mjs` to test both signed-in Web models through the bridge with a synthetic local file. The test driver runs the file read, so this check measures the Web model and bridge independently of Antigravity. The separate standalone Antigravity IDE has no integration in this package.
+
+On macOS with Antigravity Desktop 2.32.1, both Web entries appeared and Argon completed a native `read_file` round trip. A desktop test required retries. Set `GEMINI_WEB_DIAGNOSTICS=1` when running `node desktop.mjs` to see turn sizes and worker stages without printing prompt text or credentials.
 
 The browser worker requires the mode picker to confirm the requested model before sending. The current build replays text history in a fresh browser chat for each turn and returns one completed SSE event, so the first visible text can arrive later than with a native streaming model. Tool calls are prompted JSON and are limited to one declared local function per turn. Attachments, provider-side tools and native model controls are outside this prototype. Token counting is an estimate for the local harness.
 

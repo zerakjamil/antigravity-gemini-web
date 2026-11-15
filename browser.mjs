@@ -16,7 +16,7 @@ export async function openBrowser(profile) {
   return chromium.launchPersistentContext(profile, { channel: 'chrome', headless: false });
 }
 
-export async function runTurn(browser, prompt, signal, model) {
+export async function runTurn(browser, prompt, signal, model, attachmentMessage) {
   const mode = models[model];
   if (!mode) throw new Error('Unknown Gemini Web model.');
   const page = await browser.newPage();
@@ -41,17 +41,15 @@ export async function runTurn(browser, prompt, signal, model) {
     stage = 'preparing the harness context';
     let message = prompt;
     if (Buffer.byteLength(prompt) > 24 * 1024) {
-      await page.getByRole('button', { name: 'Upload & tools', exact: true }).click({ timeout: 5000 });
-      const [chooser] = await Promise.all([
-        page.waitForEvent('filechooser', { timeout: 5000 }),
-        page.getByText(/^Upload files?$/i).click({ timeout: 5000 }),
-      ]);
-      await chooser.setFiles({
+      const documentInput = page.locator('images-files-uploader input[type="file"][accept^=".txt,"]');
+      await documentInput.setInputFiles({
         name: 'antigravity-context.txt',
         mimeType: 'text/plain',
         buffer: Buffer.from(prompt),
-      });
-      message = 'Read the attached Antigravity instructions, tool declarations and conversation. Continue the final user turn. Follow the local tool response format specified at the start of the attachment.';
+      }, { timeout: 5000 });
+      await page.getByText('antigravity-context.txt', { exact: true }).first()
+        .waitFor({ state: 'attached', timeout: 15_000 });
+      message = attachmentMessage ?? 'Read the attachment and answer the request it contains.';
     }
     await composer.click();
     await page.keyboard.insertText(message);

@@ -37,15 +37,22 @@ function compile(request) {
       throw new Error('This provider supports text and local tool history only.');
     }
   }
+  const protocol = permitted.length
+    ? 'To request a listed local tool, return one plain-text line starting with LOCAL_TOOL_CALL followed by a JSON object with "name" and "args". Return only that line, without Markdown. The harness handles permissions and sends tool results in a later request.'
+    : 'Respond with text.';
   const prompt = [
     'Continue the supplied Antigravity coding conversation. Conversation history includes instructions, user input and local tool results. You cannot execute local tools yourself.',
-    permitted.length
-      ? 'To request a listed local tool, return one plain-text line starting with LOCAL_TOOL_CALL followed by a JSON object with "name" and "args". Return only that line, without Markdown. The harness handles permissions and sends tool results in a later request.'
-      : 'Respond with text.',
+    protocol,
     JSON.stringify({ permittedFunctions: permitted, systemInstruction: request.systemInstruction, contents: request.contents }),
   ].join('\n\n');
   if (Buffer.byteLength(prompt) > maxBytes) throw new Error('Prompt exceeds the bridge text limit.');
-  return { prompt, permitted: new Set(permitted.map(fn => fn.name)), required: config?.mode === 'ANY' };
+  const latest = JSON.stringify(request.contents.at(-1));
+  const attachmentMessage = [
+    'Read the attached Antigravity context. It supplies the conversation, local tool definitions, and instructions. Continue the final user turn.',
+    protocol,
+    Buffer.byteLength(latest) <= 8000 ? `Final turn: ${latest}` : 'The final turn is in the attachment.',
+  ].join('\n\n');
+  return { prompt, attachmentMessage, permitted: new Set(permitted.map(fn => fn.name)), required: config?.mode === 'ANY' };
 }
 
 function partsFromAnswer(answer, { permitted, required }) {
@@ -65,7 +72,7 @@ function json(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
-export function createBridge({ token, turn, tls, timeoutMs = 300_000 }) {
+export function createBridge({ token, turn, tls, timeoutMs = 300_000, diagnose = () => {} }) {
   if (!token) throw new Error('Set ARGON_BRIDGE_TOKEN.');
   const secret = Buffer.from(token);
   let busy = false;
@@ -119,8 +126,10 @@ export function createBridge({ token, turn, tls, timeoutMs = 300_000 }) {
     res.once('close', () => abort.abort());
     try {
       const family = name.slice('models/gemini-4-'.length, -'-web'.length);
-      const answer = await turn(input.prompt, abort.signal, family);
+      diagnose(`Browser turn for ${family} with ${Buffer.byteLength(input.prompt)} bytes.`);
+      const answer = await turn(input.prompt, abort.signal, family, input.attachmentMessage);
       const response = finish(partsFromAnswer(answer, input));
+      diagnose(response.candidates[0].content.parts[0].functionCall ? 'Browser returned a local tool call.' : 'Browser returned final text.');
       if (method === 'streamGenerateContent' && url.searchParams.get('alt') === 'sse') {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
         res.end(`data: ${JSON.stringify(response)}\n\n`);
@@ -131,6 +140,7 @@ export function createBridge({ token, turn, tls, timeoutMs = 300_000 }) {
       const detail = /^Gemini Web failed while [a-zA-Z ]+\.$/.test(error?.message)
         ? error.message
         : 'Gemini Web returned an invalid or unavailable tool response.';
+      diagnose(abort.signal.aborted ? 'Gemini Web turn cancelled or timed out.' : detail);
       if (!res.destroyed) json(res, abort.signal.aborted ? 504 : 502, {
         error: { message: abort.signal.aborted ? 'Gemini Web turn timed out.' : detail },
       });
@@ -155,7 +165,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const tls = keyPath ? { key: await readFile(keyPath), cert: await readFile(certPath) } : undefined;
   const profile = process.env.ARGON_CHROME_PROFILE ?? join(homedir(), '.gemini', 'argon-chrome-profile');
   const browser = await openBrowser(profile);
-  const server = createBridge({ token, tls, turn: (prompt, signal, family) => runTurn(browser, prompt, signal, family) });
+  const server = createBridge({ token, tls, turn: (...args) => runTurn(browser, ...args) });
   server.on('error', async (error) => {
     console.error(error.message);
     process.exitCode = 1;

@@ -31,7 +31,8 @@ try {
   const profile = process.env.ARGON_CHROME_PROFILE ?? join(homedir(), '.gemini', 'argon-chrome-profile');
   browser = await openBrowser(profile);
   if (stopping) throw new Error('Desktop launch cancelled.');
-  server = createBridge({ token, tls, turn: (prompt, signal, model) => runTurn(browser, prompt, signal, model) });
+  const diagnose = process.env.GEMINI_WEB_DIAGNOSTICS ? console.error : undefined;
+  server = createBridge({ token, tls, diagnose, turn: (...args) => runTurn(browser, ...args) });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   desktop = spawn(executable, [], {

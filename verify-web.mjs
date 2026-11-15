@@ -17,7 +17,7 @@ let bridge;
 try {
   const profile = process.env.ARGON_CHROME_PROFILE ?? join(homedir(), '.gemini', 'argon-chrome-profile');
   browser = await openBrowser(profile);
-  bridge = createBridge({ token, turn: (prompt, signal, model) => runTurn(browser, prompt, signal, model) });
+  bridge = createBridge({ token, turn: (...args) => runTurn(browser, ...args) });
   bridge.listen(0, '127.0.0.1');
   await once(bridge, 'listening');
   for (const model of ['hydrogen', 'argon']) {
